@@ -98,11 +98,11 @@ predictGeometryOccupancyIntra(
 
   int th0 = 2;
   int th1 = numOccupied < 14 ? 4 : 5;
-  int occIsPredicted = 0;
-  int occPrediction = 0;
+  int occIsPredicted = 0;//表示预测
+  int occPrediction = 0;//表示预测为占据还是不占据，这两位比特表示3种状态
 
   for (int i = 0; i < 8; i++) {
-    if (score[i] <= th0)
+    if (score[i] <= th0)//
       occIsPredicted |= 1 << i;
     else if (score[i] >= th1) {
       occIsPredicted |= 1 << i;

@@ -148,7 +148,7 @@ updatePatternFromNeighOccupancy(
     0xf0 /* x-1 */, 0xcc /* y-1 */, 0xaa /* z-1 */
   };
 
-  uint32_t patternBit = 1 << (1 << neighIdx);
+  uint32_t patternBit = 1 << (1 << neighIdx);//已编码邻居在neighberPattern中的位置，对之前neighPattern的计算对应
   uint8_t childMask = childMasks[neighIdx];
 
   // conversions between neighbour occupancy and adjacency:
@@ -162,17 +162,17 @@ updatePatternFromNeighOccupancy(
     adjacencyShift = 0;
   }
 
-  if (gnp.neighPattern & patternBit) {
+  if (gnp.neighPattern & patternBit) {//已编码邻居
     uint8_t child_occ = occupancyAtlas.getChildOcc(x, y, z);
     uint8_t child_unocc = ~child_occ;
-    child_occ &= childMask;
+    child_occ &= childMask;//只看与当前节点直接接触的邻居子节点
     if (!child_occ) {
-      /* neighbour is falsely occupied */
-      gnp.neighPattern ^= patternBit;
+      /* neighbour is falsely occupied *///由于前面的if限制了对应的neighpattern必须为0，因此异或即可将对应位置零
+      gnp.neighPattern ^= patternBit;//当false occupied时，修改对应的neighPattern
     } else {
       child_occ >>= adjacencyShift;
-      gnp.adjacencyGt1 |= gnp.adjacencyGt0 & child_occ;
-      gnp.adjacencyGt0 |= child_occ;
+      gnp.adjacencyGt1 |= gnp.adjacencyGt0 & child_occ;//判断各子节点直接相邻子节点被占据数是否大于1
+      gnp.adjacencyGt0 |= child_occ;//判断各子节点直接相邻子节点被占据数是否大于0
     }
 
     // map of children with any unoccupied adjacent child
@@ -206,7 +206,7 @@ makeGeometryNeighPattern(
   if (
     x > 0 && x < cubeSizeMinusOne && y > 0 && y < cubeSizeMinusOne && z > 0
     && z < cubeSizeMinusOne) {
-    neighPattern = occupancyAtlas.get(x + 1, y, z, sx, sy, sz);
+    neighPattern = occupancyAtlas.get(x + 1, y, z, sx, sy, sz);//注意六近邻的顺序
     neighPattern |= occupancyAtlas.get(x - 1, y, z, sx, sy, sz) << 1;
     neighPattern |= occupancyAtlas.get(x, y - 1, z, sx, sy, sz) << 2;
     neighPattern |= occupancyAtlas.get(x, y + 1, z, sx, sy, sz) << 3;
@@ -232,7 +232,7 @@ makeGeometryNeighPattern(
 
   if (!adjacent_child_contextualization_enabled_flag)
     return gnp;
-
+  //更新gnp信息
   if (x > 0)
     gnp = updatePatternFromNeighOccupancy(
       occupancyAtlas, x - 1, y, z, gnp, 0, codedAxesCurLvl & 4);

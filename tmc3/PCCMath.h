@@ -318,8 +318,8 @@ public:
 
   bool operator<(const Vec3& rhs) const
   {
-    if (data[0] == rhs[0]) {
-      if (data[1] == rhs[1]) {
+    if (data[0] == rhs[0]) {//x维度相等时才会去排y维度
+      if (data[1] == rhs[1]) {//x和y维度相等时才会去排z维度
         return (data[2] < rhs[2]);
       }
       return (data[1] < rhs[1]);

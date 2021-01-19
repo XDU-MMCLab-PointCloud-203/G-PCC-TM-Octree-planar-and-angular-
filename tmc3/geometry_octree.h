@@ -84,9 +84,9 @@ struct PCCOctree3Node {
 
 struct OctreeNodePlanar {
   // planar; first bit for x, second bit for y, third bit for z
-  uint8_t planarPossible = 7;
-  uint8_t planePosBits = 0;
-  uint8_t planarMode = 0;
+  uint8_t planarPossible = 7;//默认全为平面，只有在isplanar为负时才会改变该值，即该值的3位上出现0则一定说明该维度不是平面
+  uint8_t planePosBits = 0;//默认全为低平面
+  uint8_t planarMode = 0;//默认全为平面
 };
 
 //---------------------------------------------------------------------------

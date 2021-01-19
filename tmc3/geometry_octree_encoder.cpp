@@ -297,7 +297,7 @@ GeometryOctreeEncoder::encodePlanarMode(
   int contextAngle)
 {
   const int mask0 = (1 << planeId);//当前要编码的维度
-  const int mask1[3] = {6, 5, 3};
+  const int mask1[3] = {6, 5, 3};//110,101,011,分别指示x,y,z是否为非平面
 
   bool isPlanar = node.planarMode & mask0;//当前维度是否为平面
   int planeBit = (node.planePosBits & mask0) == 0 ? 0 : 1;//当前维度平面位置
@@ -305,7 +305,7 @@ GeometryOctreeEncoder::encodePlanarMode(
   int discreteDist = (dist <= (2 >> OctreePlanarBuffer::shiftAb) ? 0 : 1);//距离为量化为远、近两个等级
   _arithmeticEncoder->encode(isPlanar, _ctxPlanarMode[planeId]);//编码isPlanar，上下文为维度信息
 
-  if (!isPlanar) {//如果不满足平面，更新概率并退出
+  if (!isPlanar) {//如果不满足平面，更新平面信息并退出
     node.planarPossible &= mask1[planeId];
     return -1;
   }
@@ -491,8 +491,8 @@ GeometryOctreeEncoder::encodeOccupancyNeighZ(
   bool planarPossibleZ)
 {
   int numOccupiedAcc = 0;
-
-  int maxPerPlaneX = 4 - (mappedPlanarMaskX ? 2 : 1);
+  //由于NC=0的时候经历了NO=1的判定，因此至少两个子节点被占据
+  int maxPerPlaneX = 4 - (mappedPlanarMaskX ? 2 : 1);//如果在x维度上是平面，则该平面上未被占据的最大个数是2，为3的话
   int maxPerPlaneY = 4 - (mappedPlanarMaskY ? 2 : 1);
   int maxPerPlaneZ = 4 - (mappedPlanarMaskZ ? 2 : 1);
   bool sure_planarityX = mappedPlanarMaskX || !planarPossibleX;
@@ -595,52 +595,73 @@ GeometryOctreeEncoder::encodeOccupancyNeighNZ(
 {
   // code occupancy using the neighbour configuration context
   // with reduction from 64 states to 9 (or 6).
-  int neighPatternR1 = _neighPattern64toR1[neighPattern];
+  int neighPatternR1 = _neighPattern64toR1[neighPattern];//64种状态映射为9种
 
   //  int neighPattern9 = kNeighPattern64to9[neighPattern];
-  int neighPattern5 = kNeighPattern9to5[neighPatternR1];
-  int neighPattern3 = kNeighPattern9to3[neighPatternR1];
+  int neighPattern5 = kNeighPattern9to5[neighPatternR1];//9种继续映射为5种
+  int neighPattern3 = kNeighPattern9to3[neighPatternR1];//5种映射为3种
 
   //  int neighPattern7 = kNeighPattern10to7[neighPattern10];
   //  int neighPattern5 = kNeighPattern7to5[neighPattern7];
 
   uint32_t partialOccupancy = 0;
-
+  //planarPossible只能说明当为0时一定不是平面，因此只有0信息有用
+  //注意planarMask的取值，在映射之前，在高平面时其取值为0x0f,数值1指示的是对应的子节点是否一定不被占据，而不是是否占据
+  //planarPossibleX是根据isplanar判定的，其默认为1，如果为1，说明不了什么，但是如果其为0，说明一定不是平面
+  //而planarMask则作用与planarPossible相反，其默认为0，因此如果是0则说明不了什么，但是非0，则说明一定为平面且可以推断出平面的位置
+  //统计结果也可以验证这个结论，当mappedPlanarMaskX非0时，planarPossibleX一定为1；当planarPossibleX为0时，mappedPlanarMaskX一定为0
   bool sure_planarityX = mappedPlanarMaskX || !planarPossibleX;
+  //这个变量本身没有明确的意义，要配合下面for循环的第一个continue来理解！！！
+  //第一个continue对于通过sure_planarityX来判断后续的bitIsOneX至关重要
+  //maskedOccupancy由mappedPlanarMaskX、Y、Z组成，以mappedPlanarMaskX为例，
+  //如果其为正，说明一定存在平面，而当前节点如果不在对应的平面上，则直接被跳过
+  //mappedPlanarMaskX为正，因此留下的节点必定在平面上
+  //因此sure_planarityX进入到bitIsOneX判定时，其为true时的情况有两种
+  //1，x维度必定不存在平面；2，x维度必定存在平面且当前待编码的子节点就处于这个x平面
+  //这两种情况都可以在子节点所处平面未占据的节点数为3时直接确定最后一个为占据
+
+
   bool sure_planarityY = mappedPlanarMaskY || !planarPossibleY;
   bool sure_planarityZ = mappedPlanarMaskZ || !planarPossibleZ;
-
-  int maskedOccupancy =
+  //由于这个mask指示的非占据情况，因此三者相或即可得出能确定的非占据的所以情况
+  int maskedOccupancy =//注意取值为0时说明三个维度上都不是平面
     mappedPlanarMaskX | mappedPlanarMaskY | mappedPlanarMaskZ;
 
-  int coded0X[2] = {0, 0};
+  int coded0X[2] = {0, 0};//存储各维度平面中高平面与低平面不被占据的子节点个数
   int coded0Y[2] = {0, 0};
   int coded0Z[2] = {0, 0};
-  if (maskedOccupancy) {
-    for (int i = 0; i < 8; i++) {
-      if ((maskedOccupancy >> i) & 1) {
-        coded0X[(mappedFixedMaskX0 >> i) & 1]++;
-        coded0Y[(mappedFixedMaskY0 >> i) & 1]++;
-        coded0Z[(mappedFixedMaskZ0 >> i) & 1]++;
+  if (maskedOccupancy) {//通过平面提供的信息，只要不是全部非平面，可以通过平面信息得知哪些子节点一定非占据
+    for (int i = 0; i < 8; i++) {//关心的只是个数，所以不用经过下面的kOccBitCodingOrder[i]的映射
+      if ((maskedOccupancy >> i) & 1) {//对应位被确定为非占据，则子节点所在各维度上对应平面中非占据个数加1
+        coded0X[(mappedFixedMaskX0 >> i) & 1]++;//mappedFixedMaskX0在映射前为0xf0
+        coded0Y[(mappedFixedMaskY0 >> i) & 1]++;//mappedFixedMaskY0在映射前为0xcc
+        coded0Z[(mappedFixedMaskZ0 >> i) & 1]++;//mappedFixedMaskZ0在映射前为0xaa
       }
     }
   }
 
   // NB: it is impossible for pattern to be 0 (handled in Z case).
   for (int i = 0; i < 8; i++) {
-    int bitIdx = kOccBitCodingOrder[i];
-    if ((maskedOccupancy >> bitIdx) & 1)
+    int bitIdx = kOccBitCodingOrder[i];//调整编码顺序以适应后续的旋转、屏蔽
+    if ((maskedOccupancy >> bitIdx) & 1)//该子节点不占据，由于解码端同样可以推导，因此不用编码，直接跳过
       continue;
+	//另外，这一步对于通过sure_planarityX来判断后续的bitIsOneX至关重要
+	//maskedOccupancy由mappedPlanarMaskX、Y、Z组成，以mappedPlanarMaskX为例，
+	//如果其为正，说明一定存在平面，而当前节点如果不在对应的平面上，则直接被跳过
+	//mappedPlanarMaskX为正时，因此留下的节点必定在平面上
+	//因此前面的sure_planarityX为true时的情况有两种
+	//1，x维度必定不是个平面；2，x维度是平面且当前子节点处于x平面
+
 
     int idx;
     if (i < 4) {
-      idx = ((neighPatternR1 - 1) << i) + partialOccupancy + i + 1;
+      idx = ((neighPatternR1 - 1) << i) + partialOccupancy + i + 1;//子节点0，1，2，3的六近邻都是9种状态
     } else if (i < 6) {
-      idx = ((neighPattern5 - 1) << i) + partialOccupancy + i + 1;
+      idx = ((neighPattern5 - 1) << i) + partialOccupancy + i + 1;//子节点4，5的六近邻都是5种状态
     } else if (i == 6) {
-      idx = ((neighPattern3 - 1) << i) + partialOccupancy + i + 1;
+      idx = ((neighPattern3 - 1) << i) + partialOccupancy + i + 1;//子节点6的六近邻状态是3种
     } else if (i == 7) {
-      idx = partialOccupancy + i + 1;
+      idx = partialOccupancy + i + 1;//子节点7不考虑六近邻
     } else {
       // work around clang -Wsometimes-uninitialized fault
       break;
@@ -650,25 +671,26 @@ GeometryOctreeEncoder::encodeOccupancyNeighNZ(
     int bitAdjGt1 = (mappedOccAdjGt1 >> bitIdx) & 1;
     int bitAdjUnocc = (mappedOccAdjUnocc >> bitIdx) & 1;
 
-    int numAdj = bitAdjGt0 + bitAdjGt1;
-    int idxAdj = bitAdjUnocc + 2 * numAdj;
+    int numAdj = bitAdjGt0 + bitAdjGt1;//只有三种情况：0，无相邻子节点；1：只有一个相邻子节点；2，两个及以上子节点
+    int idxAdj = bitAdjUnocc + 2 * numAdj;//最大值为5
     if (i > 4) {
       static const int8_t kCtxIdxAdjReduc567[6] = {0, 0, 1, 2, 3, 3};
       idxAdj = kCtxIdxAdjReduc567[idxAdj];
     }
 
-    int ctxIdxMapIdx = 3 * idxAdj;
-    if (!maskedOccupancy) {  // planar
+    int ctxIdxMapIdx = 3 * idxAdj;//取值范围为0到17
+    if (!maskedOccupancy) {  // 三个平面都判定为非平面
       int bitIsPredicted = (mappedOccIsPredicted >> bitIdx) & 1;
       int bitPrediction = (mappedOccPrediction >> bitIdx) & 1;
-      ctxIdxMapIdx = 3 * idxAdj + bitIsPredicted + bitPrediction;
+      ctxIdxMapIdx = 3 * idxAdj + bitIsPredicted + bitPrediction;//
     }
 
     // NB: if firt 7 bits are 0, then the last is implicitly 1.
     // masking for planar is here
-    int mask0X = (mappedFixedMaskX0 >> bitIdx) & 1;
-    bool bitIsOneX = (sure_planarityX && coded0X[mask0X] >= 3)
-      || (coded0X[0] + coded0X[1] >= 7);
+    int mask0X = (mappedFixedMaskX0 >> bitIdx) & 1;//当前子节点属于x低平面还是高平面，0则说明其位于低平面，1位于高平面
+	//如果x是平面，那么x的低平面与高平面一定只有一个平面有点
+    bool bitIsOneX = (sure_planarityX && coded0X[mask0X] >= 3)//子节点所在的0-3或者4-7最多1个被占据，且当前子节点位于平面或者当前节点不是平面
+      || (coded0X[0] + coded0X[1] >= 7);//七个子节点都不占据的时候
 
     int mask0Y = (mappedFixedMaskY0 >> bitIdx) & 1;
     bool bitIsOneY = (sure_planarityY && coded0Y[mask0Y] >= 3)
@@ -677,14 +699,15 @@ GeometryOctreeEncoder::encodeOccupancyNeighNZ(
     int mask0Z = (mappedFixedMaskZ0 >> bitIdx) & 1;
     bool bitIsOneZ = (sure_planarityZ && coded0Z[mask0Z] >= 3)
       || (coded0Z[0] + coded0Z[1] >= 7);
-
+	//如果bitIsOneX || bitIsOneY || bitIsOneZ，则说明最后一位bit一定为1，
     int bit = (mappedOccupancy >> bitIdx) & 1;
     if (!(bitIsOneX || bitIsOneY || bitIsOneZ)) {
       auto& ctxIdxMap = _ctxIdxMaps[ctxIdxMapIdx];
-      int ctxIdx = ctxIdxMap.evolve(bit, &ctxIdxMap[i][idx]);
+      int ctxIdx = ctxIdxMap.evolve(bit, &ctxIdxMap[i][idx]);//注意此处与之前所看的上下文编码不同，其得到的ctx的值都是初始化之后再更新的，idx只是个索引，
+	  //之前的上下文编码以及平面模式中的上下文编码是固定索引，更新概率；而此处每一个情况存的是索引值，更新的也是这个索引值。这有点类似265中固定编码器，更新索引
       _arithmeticEncoder->encode(bit, _ctxOccupancy[ctxIdx]);
 
-      if (!bit) {
+      if (!bit) {//之前是通过平面信息来推断，并不能包含所有的情况，因此还需根据实际情况来继续判断
         coded0X[mask0X]++;
         coded0Y[mask0Y]++;
         coded0Z[mask0Z]++;
@@ -764,22 +787,22 @@ GeometryOctreeEncoder::encodeOccupancy(
   bool planarPossibleZ)
 {
   // 3 planars => single child and we know its position
-  if (planarMaskX && planarMaskY && planarMaskZ)
-    return;
+  if (planarMaskX && planarMaskY && planarMaskZ)//说明是三个平面，则可以根据planePos
+    return;//需要注意的是，如果为1则一定是三平面，但是如果为0，则不一定不是三平面/NO=1
 
-  if (gnp.neighPattern == 0) {
-    bool singleChild = !popcntGt1(occupancy);
-    if (planarPossibleX && planarPossibleY && planarPossibleZ) {
+  if (gnp.neighPattern == 0) {//资格判定，保证singleNode的正确率
+    bool singleChild = !popcntGt1(occupancy);//判断NO=1，即是否为真的三平面
+    if (planarPossibleX && planarPossibleY && planarPossibleZ) {//这也是一个资格判断,能排除一部分一定不是singlechild的情况，仅此而已
       _arithmeticEncoder->encode(singleChild, _ctxSingleChild);
     }
 
-    if (singleChild) {
+    if (singleChild) {//是singleNode但是上面没判定出来
       // no siblings => encode index = (z,y,x) not 8bit pattern
       // if mask is not zero, then planar, then child z known from plane index
-      if (!planarMaskZ)
-        _arithmeticEncoder->encode(!!(occupancy & 0xaa));
+      if (!planarMaskZ)//依次将planarMask没有判定出来的继续判定
+        _arithmeticEncoder->encode(!!(occupancy & 0xaa));//以此判断低平面还是高平面
 
-      if (!planarMaskY)
+      if (!planarMaskY)	
         _arithmeticEncoder->encode(!!(occupancy & 0xcc));
 
       if (!planarMaskX)
@@ -790,8 +813,8 @@ GeometryOctreeEncoder::encodeOccupancy(
   }
 
   // at least two child nodes occupied and two planars => we know the occupancy
-  if (gnp.neighPattern == 0) {
-    if (planarMaskX && planarMaskY)
+  if (gnp.neighPattern == 0) {//这个限定是必须的，因为如果不和singleChild保持一致的话，不能确保一定不存在NO=1即实质上为三个平面的情况
+    if (planarMaskX && planarMaskY)//判断两个方向的平面是否重合，如果重合，配合planePosition即可确定occupancy
       return;
     if (planarMaskY && planarMaskZ)
       return;
@@ -800,18 +823,19 @@ GeometryOctreeEncoder::encodeOccupancy(
   }
 
   auto neighPattern = gnp.neighPattern;
-  auto mapOcc = mapGeometryOccupancy(occupancy, neighPattern);
-  auto mapOccIsP = mapGeometryOccupancy(occupancyIsPred, neighPattern);
-  auto mapOccP = mapGeometryOccupancy(occupancyPred, neighPattern);
-  auto mapAdjGt0 = mapGeometryOccupancy(gnp.adjacencyGt0, neighPattern);
-  auto mapAdjGt1 = mapGeometryOccupancy(gnp.adjacencyGt1, neighPattern);
-  auto mapAdjUnocc = mapGeometryOccupancy(gnp.adjacencyUnocc, neighPattern);
+  //接下来的旋转变换都是基于neighPattern来决定的，以保持一致性
+  auto mapOcc = mapGeometryOccupancy(occupancy, neighPattern);//根据六近邻的几何旋转不变性来映射occupancy
+  auto mapOccIsP = mapGeometryOccupancy(occupancyIsPred, neighPattern);//指示是否帧内预测
+  auto mapOccP = mapGeometryOccupancy(occupancyPred, neighPattern);//指示预测的结果
+  auto mapAdjGt0 = mapGeometryOccupancy(gnp.adjacencyGt0, neighPattern);//指示是否有大于0个共面的子节点
+  auto mapAdjGt1 = mapGeometryOccupancy(gnp.adjacencyGt1, neighPattern);//指示是否有大于1个共面的子节点
+  auto mapAdjUnocc = mapGeometryOccupancy(gnp.adjacencyUnocc, neighPattern);//指示未占据的共面子节点个数
 
-  auto mapPlanarMaskX = mapGeometryOccupancy(planarMaskX, neighPattern);
+  auto mapPlanarMaskX = mapGeometryOccupancy(planarMaskX, neighPattern);//mask指示是否为非平面以及平面位置，其八位，0代表非平面，0xfc代表高平面
   auto mapPlanarMaskY = mapGeometryOccupancy(planarMaskY, neighPattern);
   auto mapPlanarMaskZ = mapGeometryOccupancy(planarMaskZ, neighPattern);
 
-  auto mapFixedMaskX0 = mapGeometryOccupancy(0xf0, neighPattern);
+  auto mapFixedMaskX0 = mapGeometryOccupancy(0xf0, neighPattern);//固定的mask，用来指示各维度的高平面
   auto mapFixedMaskY0 = mapGeometryOccupancy(0xcc, neighPattern);
   auto mapFixedMaskZ0 = mapGeometryOccupancy(0xaa, neighPattern);
 
@@ -820,7 +844,7 @@ GeometryOctreeEncoder::encodeOccupancy(
       neighPattern, mapOcc, mapOccIsP, mapOccP, mapAdjGt0, mapAdjGt1,
       mapAdjUnocc, mapPlanarMaskX, mapFixedMaskX0, planarPossibleX,
       mapPlanarMaskY, mapFixedMaskY0, planarPossibleY, mapPlanarMaskZ,
-      mapFixedMaskZ0, planarPossibleZ);
+      mapFixedMaskZ0, planarPossibleZ);//
   else
     encodeOccupancyBytewise(neighPattern, mapOcc);
 }
@@ -1405,9 +1429,9 @@ GeometryOctreeEncoder::encodeDirectPosition(
   if (numPoints == 2 && joint_2pt_idcm_enabled_flag) {
     // Apply an implicit ordering to the two points, considering only the
     // directly coded axes
-    if (times(points[1], directIdcm) < times(points[0], directIdcm)) {
-      std::swap(points[0], points[1]);
-      pointCloud.swapPoints(node.start, node.start + 1);
+    if (times(points[1], directIdcm) < times(points[0], directIdcm)) {//对两点进行排序
+      std::swap(points[0], points[1]);                                 
+      pointCloud.swapPoints(node.start, node.start + 1);//点云中两点也进行排序，排序十分重要，决定着能否在坐标不等时节省一个bit
     }
 
     encodeOrdered2ptPrefix(points, directIdcm, nodeSizeLog2Rem);
@@ -1606,7 +1630,7 @@ encodeGeometryOctree(
 
     // if one dimension is not split, atlasShift[k] = 0
     int codedAxesPrevLvl = depth ? gbh.tree_lvl_coded_axis_list[depth - 1] : 7;//上一层被编码的维度，xyz组成三位，最大值为7
-    int codedAxesCurLvl = gbh.tree_lvl_coded_axis_list[depth];//当前层被编码的维度
+    int codedAxesCurLvl = gbh.tree_lvl_coded_axis_list[depth];//当前层被编码的维度，即根据qtbt指示每次划分的方式
 
     auto pointSortMask = qtBtChildSize(nodeSizeLog2, childSizeLog2);//各维度上子节点相对父节点边长变化量
 
@@ -1668,7 +1692,7 @@ encodeGeometryOctree(
       auto effectiveChildSizeLog2 = childSizeLog2 - shiftBits;//量化后的子节点边长
 
       // make quantisation work with qtbt and planar.
-      int codedAxesCurNode = codedAxesCurLvl;//当前节点被编码的维度
+      int codedAxesCurNode = codedAxesCurLvl;//当前节点被编码的维度，即qtbt的影响
       if (shiftBits != 0) {//考虑量化的影响
         for (int k = 0; k < 3; k++) {
           if (effectiveChildSizeLog2[k] < 0)
@@ -1723,7 +1747,7 @@ encodeGeometryOctree(
       int numSiblings = 0;
       for (int i = 0; i < 8; i++) {
         if (childCounts[i]) {
-          occupancy |= 1 << i;//根据八个子节点中是否有点来生成8位occupancy
+          occupancy |= 1 << i;//根据八个子节点中是否有点来生成8位occupancy，注意从低位开始
           numSiblings++;
         }
       }
@@ -1767,7 +1791,7 @@ encodeGeometryOctree(
 
         int planarProb[3] = {127, 127, 127};
         // determine planarity if eligible
-        if (planarEligible[0] || planarEligible[1] || planarEligible[2])//角度编码
+        if (planarEligible[0] || planarEligible[1] || planarEligible[2])//决定平面模式的信息
           encoder.determinePlanarMode(
             occupancy, planarEligible, node0, planar, gnp.neighPattern,
             planarProb, contextAngle, contextAnglePhiX, contextAnglePhiY);
@@ -1782,7 +1806,7 @@ encodeGeometryOctree(
       if (isLeafNode(effectiveNodeSizeLog2))//叶子节点不能再进行IDCM
         node0.idcmEligible = false;
 
-      if (node0.idcmEligible) {
+      if (node0.idcmEligible) {//注意IDCM与正常occupancy的顺序，先进行IDCM的判断与编码，再去正常occupancy
         // todo(df): this is pessimistic in the presence of idcm quantisation,
         // since that is eligible may only meet the point count constraint
         // after quantisation, which is performed after the decision is taken.
@@ -1791,8 +1815,8 @@ encodeGeometryOctree(
 
         encoder.encodeIsIdcm(mode);
 
-        if (mode != DirectMode::kUnavailable) {
-          int idcmShiftBits = shiftBits;
+        if (mode != DirectMode::kUnavailable) {//当不可能IDCM时继续正常occupancy
+          int idcmShiftBits = shiftBits;//似乎没有启用
           auto idcmSize = effectiveNodeSizeLog2;
 
           if (idcmQp) {
@@ -1805,7 +1829,7 @@ encodeGeometryOctree(
               checkDuplicatePoints(pointCloud, node0, pointIdxToDmIdx);
           }
 
-          encoder.encodeDirectPosition(
+          encoder.encodeDirectPosition(//
             mode, gps.geom_unique_points_flag, gps.joint_2pt_idcm_enabled_flag,
             idcmSize, idcmShiftBits, node0, planar, pointCloud,
             gps.geom_angular_mode_enabled_flag, headPos, zLaser, thetaLaser,
@@ -1841,10 +1865,11 @@ encodeGeometryOctree(
         // mask to be used for the occupancy coding
         // (bit =1 => occupancy bit not coded due to not belonging to the plane)
         int planarMask[3] = {0, 0, 0};
-        maskPlanar(planar, planarMask, codedAxesCurNode);
-
+        maskPlanar(planar, planarMask, codedAxesCurNode);//给出planar以及mask的信息
+		//mask的作用是isplanar与planarPosition的融合，把一个1bit符号转换为对应到8位occupancy中的位置
+		//注意，如果planarPos=1对应的mask为0x0f，其用法是说明对应位一定不占据，而不是对应位占据
         // generate intra prediction
-        bool intraPredUsed = !(planarMask[0] | planarMask[1] | planarMask[2]);
+        bool intraPredUsed = !(planarMask[0] | planarMask[1] | planarMask[2]);//大概率不是平面
         int occupancyIsPredicted = 0;
         int occupancyPrediction = 0;
         if (
@@ -1859,7 +1884,7 @@ encodeGeometryOctree(
           gnp, occupancy, occupancyIsPredicted, occupancyPrediction,
           planarMask[0], planarMask[1], planarMask[2],
           planar.planarPossible & 1, planar.planarPossible & 2,
-          planar.planarPossible & 4);
+          planar.planarPossible & 4);//planarPossible指示三个方向上经过isPlanar判定的结果
       }
 
       // update atlas for child neighbours
@@ -1909,7 +1934,7 @@ encodeGeometryOctree(
       //  - otherwise, insert split children into fifo while updating neighbour state
       int childPointsStartIdx = node0.start;
 
-      for (int i = 0; i < 8; i++) {//开始创建八个子节点并将八个子节点堆入FIFO队列中
+      for (int i = 0; i < 8; i++) {//开始创建八个子节点并将八个子节点堆入FIFO队列中,注意节点的顺序不受编码occupancy时旋转变换的影响
         if (!childCounts[i]) {//空节点即跳过
           // child is empty: skip
           continue;

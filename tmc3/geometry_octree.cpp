@@ -94,18 +94,18 @@ updateQtBtParameters(
   int* maxNumQtbtBeforeOt,
   int* minSizeQtbt)
 {
-  int nodeMinDimLog2 = nodeSizeLog2.min();
-  int nodeMaxDimLog2 = nodeSizeLog2.max();
+  int nodeMinDimLog2 = nodeSizeLog2.min();//返回三边长最小值
+  int nodeMaxDimLog2 = nodeSizeLog2.max();//返回三边长最大值
 
   // max number of qtbt partitions before ot is bounded by difference between
   // max and min node size
-  if (*maxNumQtbtBeforeOt > (nodeMaxDimLog2 - nodeMinDimLog2))
-    *maxNumQtbtBeforeOt = nodeMaxDimLog2 - nodeMinDimLog2;
+  if (*maxNumQtbtBeforeOt > (nodeMaxDimLog2 - nodeMinDimLog2))//如果输入的参数偏大
+    *maxNumQtbtBeforeOt = nodeMaxDimLog2 - nodeMinDimLog2;//改为真实值
   // min depth of qtbt partition is bounded by min node size
   if (*minSizeQtbt > nodeMinDimLog2)
     *minSizeQtbt = nodeMinDimLog2;
   // if all dimensions have same size, min depth of qtbt should be 0
-  if (nodeMaxDimLog2 == nodeMinDimLog2) {
+  if (nodeMaxDimLog2 == nodeMinDimLog2) {//三边相等则qtbt最小边应该为0
     *minSizeQtbt = 0;
   }
 
@@ -133,7 +133,7 @@ mkQtBtNodeSizeList(
   // update qtbt parameters
   int maxNumQtbtBeforeOt = qtbt.maxNumQtBtBeforeOt;
   int minSizeQtbt = qtbt.minQtbtSizeLog2;
-  updateQtBtParameters(
+  updateQtBtParameters(//修改输入的参数，如果参数配置的不合理
     nodeSizeLog2, qtbt.trisoupEnabled, &maxNumQtbtBeforeOt, &minSizeQtbt);
 
   while (!isLeafNode(nodeSizeLog2)) {
@@ -165,22 +165,22 @@ mkQtBtNodeSizeList(
 uint8_t
 mapGeometryOccupancy(uint8_t occupancy, uint8_t neighPattern)
 {
-  switch (kOccMapRotateZIdFromPatternXY[neighPattern & 15]) {
+  switch (kOccMapRotateZIdFromPatternXY[neighPattern & 15]) {//判断能否绕z轴旋转
   case 1: occupancy = kOccMapRotateZ090[occupancy]; break;
   case 2: occupancy = kOccMapRotateZ180[occupancy]; break;
   case 3: occupancy = kOccMapRotateZ270[occupancy]; break;
   }
 
-  bool flag_ud = (neighPattern & 16) && !(neighPattern & 32);
+  bool flag_ud = (neighPattern & 16) && !(neighPattern & 32);//延xy平面上下翻转
   if (flag_ud) {
     occupancy = kOccMapMirrorXY[occupancy];
   }
 
-  if (kOccMapRotateYIdFromPattern[neighPattern]) {
+  if (kOccMapRotateYIdFromPattern[neighPattern]) {//判断绕y轴旋转
     occupancy = kOccMapRotateY270[occupancy];
   }
 
-  switch (kOccMapRotateXIdFromPattern[neighPattern]) {
+  switch (kOccMapRotateXIdFromPattern[neighPattern]) {//判断绕x轴旋转
   case 1: occupancy = kOccMapRotateX090[occupancy]; break;
   case 2: occupancy = kOccMapRotateX270Y180[occupancy]; break;
   case 3: occupancy = kOccMapRotateX090Y180[occupancy]; break;
@@ -292,7 +292,7 @@ CtxMapOctreeOccupancy::operator=(CtxMapOctreeOccupancy&& rhs)
 CtxMapOctreeOccupancy::CtxMapOctreeOccupancy()
 {
   map.reset(new CtxIdxMap);
-  b[0] = map->b0;
+  b[0] = map->b0;//指向b0
   b[1] = map->b1;
   b[2] = map->b2;
   b[3] = map->b3;
@@ -303,7 +303,7 @@ CtxMapOctreeOccupancy::CtxMapOctreeOccupancy()
 
   using std::begin;
   using std::end;
-  std::fill(begin(map->b0), end(map->b0), 127);
+  std::fill(begin(map->b0), end(map->b0), 127);//初始化b0数组内数值为127
   std::fill(begin(map->b1), end(map->b1), 127);
   std::fill(begin(map->b2), end(map->b2), 127);
   std::fill(begin(map->b3), end(map->b3), 127);
@@ -319,19 +319,19 @@ CtxMapOctreeOccupancy::CtxMapOctreeOccupancy()
 void
 setPlanesFromOccupancy(int occupancy, OctreeNodePlanar& planar)
 {
-  uint8_t plane0 = 0;
+  uint8_t plane0 = 0;//低平面是否有节点被占据
   plane0 |= !!(occupancy & 0x0f) << 0;
   plane0 |= !!(occupancy & 0x33) << 1;
   plane0 |= !!(occupancy & 0x55) << 2;
 
-  uint8_t plane1 = 0;
+  uint8_t plane1 = 0;//高平面是否有节点被占据
   plane1 |= !!(occupancy & 0xf0) << 0;
   plane1 |= !!(occupancy & 0xcc) << 1;
   plane1 |= !!(occupancy & 0xaa) << 2;
 
   // Only planar if a single plane normal to an axis is occupied
-  planar.planarMode = plane0 ^ plane1;
-  planar.planePosBits = planar.planarMode & plane1;
+  planar.planarMode = plane0 ^ plane1;//确定是否为平面
+  planar.planePosBits = planar.planarMode & plane1;//确定是否为高平面
 }
 
 //============================================================================
@@ -533,10 +533,10 @@ OctreePlanarState::operator=(OctreePlanarState&& rhs)
 int
 maskPlanarX(const OctreeNodePlanar& planar)
 {
-  if ((planar.planarMode & 1) == 0)
+  if ((planar.planarMode & 1) == 0)//不是平面，直接存0
     return 0;
 
-  return (planar.planePosBits & 1) ? 0x0f : 0xf0;
+  return (planar.planePosBits & 1) ? 0x0f : 0xf0;//是平面则确定一定不被占据的节点信息
 }
 
 //----------------------------------------------------------------------------
@@ -565,18 +565,18 @@ maskPlanarZ(const OctreeNodePlanar& planar)
 
 // three direction mask
 void
-maskPlanar(OctreeNodePlanar& planar, int mask[3], int codedAxes)
+maskPlanar(OctreeNodePlanar& planar, int mask[3], int codedAxes)//数组传参只能传引用
 {
   for (int k = 0; k <= 2; k++) {
     // QTBT does not split in this direction
     //   => infer the mask low for occupancy bit coding
-    if (!(codedAxes & (4 >> k))) {
+    if (!(codedAxes & (4 >> k))) {//codedAxes为1说明是该维度会被划分
       planar.planePosBits &= ~(1 << k);
       planar.planarMode |= 1 << k;
     }
   }
 
-  mask[0] = maskPlanarX(planar);
+  mask[0] = maskPlanarX(planar);//并不是一个一位比特，而是指示每一个子节点是否一定不被占据
   mask[1] = maskPlanarY(planar);
   mask[2] = maskPlanarZ(planar);
 }
@@ -606,7 +606,7 @@ determineContextAngleForPlanar(
   Vec3<int64_t> midNode = {1 << (childSizeLog2[0] ? childSizeLog2[0] - 1 : 0),//获取nodesize大小
                            1 << (childSizeLog2[1] ? childSizeLog2[1] - 1 : 0),
                            1 << (childSizeLog2[2] ? childSizeLog2[2] - 1 : 0)};
-  uint64_t xLidar =//雷达相对坐标
+  uint64_t xLidar =//节点中心到雷达head相对坐标
     std::abs(((absPos[0] - headPos[0] + midNode[0]) << 8) - 128);
   uint64_t yLidar =
     std::abs(((absPos[1] - headPos[1] + midNode[1]) << 8) - 128);
